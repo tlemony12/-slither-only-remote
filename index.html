@@ -1,0 +1,120 @@
+<!DOCTYPE html>
+<html lang="th"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Slither Online</title>
+<style>
+:root{box-sizing:border-box}
+html,body{height:100%;margin:0;background:#0b0f1a;color:#fff;overflow:hidden;font-family:system-ui,-apple-system,"Segoe UI",Tahoma,sans-serif;touch-action:none;user-select:none;-webkit-user-select:none}
+canvas{position:fixed;inset:0;width:100%;height:100%}
+#menu{position:fixed;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:14px;background:rgba(5,8,16,.72);z-index:2;text-align:center;padding:20px}
+h1{margin:0;font-size:clamp(40px,10vw,76px);letter-spacing:4px;background:linear-gradient(90deg,#5effd8,#5e7bff,#ff7de9);-webkit-background-clip:text;background-clip:text;color:transparent}
+#msg{font-size:18px;min-height:24px}
+input{font-size:18px;padding:12px 16px;border-radius:999px;border:2px solid #5e7bff;background:#101830;color:#fff;text-align:center;outline:none;width:min(280px,80vw)}
+button{font-size:20px;font-weight:700;padding:12px 44px;border-radius:999px;border:0;background:linear-gradient(90deg,#5effd8,#5e7bff);color:#06101f;cursor:pointer}
+#inv{display:none;font-size:15px;padding:9px 24px;background:#25304f;color:#fff}
+.hint{font-size:14px;opacity:.7;max-width:380px;line-height:1.5}
+#bb{position:fixed;right:calc(18px + env(safe-area-inset-right,0px));bottom:calc(24px + env(safe-area-inset-bottom,0px));width:84px;height:84px;border-radius:50%;background:rgba(94,255,216,.18);border:2px solid #5effd8;z-index:1;display:none;align-items:center;justify-content:center;font-size:28px}
+@media (pointer:coarse){#bb{display:flex}}
+</style></head><body>
+<canvas id="c"></canvas><div id="bb">⚡</div>
+<div id="menu">
+  <h1>SLITHER</h1>
+  <div id="msg"></div>
+  <input id="nm" maxlength="14" placeholder="ชื่อของคุณ" autocomplete="off">
+  <button id="go">เล่น</button>
+  <button id="inv">คัดลอกลิงก์ชวนเพื่อน</button>
+  <div id="net" class="hint">กำลังเชื่อมต่อเซิร์ฟเวอร์…</div>
+  <div class="hint">เมาส์/นิ้ว = เลี้ยว · คลิกค้างหรือ Space = เร่งความเร็ว<br>ห้องละสูงสุด 10 คน · ส่งลิงก์ชวนเพื่อนเพื่อเข้าห้องเดียวกัน</div>
+</div>
+<script>
+const cv=document.getElementById('c'),ctx=cv.getContext('2d'),$=id=>document.getElementById(id);
+let w,h,dpr;function rs(){dpr=Math.min(devicePixelRatio||1,2);w=innerWidth;h=innerHeight;cv.width=w*dpr;cv.height=h*dpr}addEventListener('resize',rs);rs();
+const TAU=Math.PI*2,R=Math.random;
+const PAL=[['#ff5e5e','#ffd35e'],['#5ec8ff','#5e7bff'],['#7dff7d','#2bb673'],['#ff7de9','#a24bff'],['#ffa94d','#ff5e5e'],['#ffffff','#9aa4b8'],['#5effd8','#2b8cff'],['#ffe066','#7dff7d']];
+let W=2400,ws=null,myId=0,state='menu',foods=new Map(),sn=new Map(),cam={x:0,y:0,z:.8},mouse={a:0},boostKey=false,bbHeld=false,roomCode='',humans=0,closed=false;
+const params=new URLSearchParams(location.search);
+const rad=m=>8+Math.sqrt(m)*.55;
+try{$('nm').value=localStorage.getItem('slither_nm')||''}catch(e){}
+function addF(a){foods.set(a[0],{x:a[1],y:a[2],c:`hsl(${a[3]} 90% 60%)`,v:a[4],r:a[5],p:R()*TAU})}
+function net(t){$('net').textContent=t}
+function connect(){
+  ws=new WebSocket((location.protocol==='https:'?'wss://':'ws://')+location.host);
+  ws.onopen=()=>net('เชื่อมต่อเซิร์ฟเวอร์แล้ว'+(params.get('room')?' · ห้อง '+params.get('room').toUpperCase():''));
+  ws.onclose=()=>{closed=true;state='menu';$('menu').style.display='flex';$('msg').textContent='การเชื่อมต่อหลุด';$('go').textContent='เชื่อมต่อใหม่';net('กดปุ่มเพื่อรีโหลดและเชื่อมต่อใหม่')};
+  ws.onmessage=e=>{let m;try{m=JSON.parse(e.data)}catch{return}
+    if(m.t==='init'){W=m.W;roomCode=m.room;foods.clear();for(const f of m.foods)addF(f);$('inv').style.display='inline-block';net('🌐 ห้อง '+roomCode.toUpperCase())}
+    else if(m.t==='play'){myId=m.id;state='play';$('menu').style.display='none'}
+    else if(m.t==='s'){snap(m)}
+    else if(m.t==='dead'){state='dead';$('msg').textContent='คุณตายแล้ว! ความยาวสุดท้าย: '+m.score;$('go').textContent='เล่นอีกครั้ง';$('menu').style.display='flex'}
+    else if(m.t==='full'){$('msg').textContent='ห้องนี้เต็มแล้ว (10 คน) ลองลิงก์อื่นหรือเปิดโดยไม่ใส่ ?room=';$('go').disabled=false}}}
+function snap(m){
+  humans=m.h;const seen=new Set();
+  for(const [id,name,pal,mass,ang,b,p] of m.sn){seen.add(id);let s=sn.get(id);if(!s){s={cur:p.slice()};sn.set(id,s)}
+    if(s.cur.length!==p.length)s.cur=p.slice();s.tgt=p;s.name=name;s.pal=PAL[pal]||PAL[0];s.mass=mass;s.ang=ang;s.boost=!!b}
+  for(const id of sn.keys())if(!seen.has(id))sn.delete(id);
+  for(const id of m.e)foods.delete(id);for(const a of m.a)addF(a)}
+function play(){
+  if(closed||!ws||ws.readyState!==1){location.reload();return}
+  const n=$('nm').value.trim()||'Player';try{localStorage.setItem('slither_nm',n)}catch(e){}
+  ws.send(JSON.stringify({t:'join',name:n,room:params.get('room')||'',pal:R()*8|0}))}
+$('go').onclick=play;$('nm').addEventListener('keydown',e=>{if(e.key==='Enter')play()});
+$('inv').onclick=()=>{const u=location.origin+location.pathname+'?room='+roomCode;
+  (navigator.clipboard?navigator.clipboard.writeText(u):Promise.reject()).then(()=>{$('inv').textContent='คัดลอกแล้ว ✓'},()=>prompt('คัดลอกลิงก์นี้',u))};
+cv.addEventListener('pointermove',e=>{mouse.a=Math.atan2(e.clientY-h/2,e.clientX-w/2)});
+cv.addEventListener('pointerdown',e=>{mouse.a=Math.atan2(e.clientY-h/2,e.clientX-w/2);if(e.pointerType==='mouse')boostKey=true});
+addEventListener('pointerup',e=>{if(e.pointerType==='mouse')boostKey=false;bbHeld=false});
+addEventListener('keydown',e=>{if(e.code==='Space'&&document.activeElement.tagName!=='INPUT'){boostKey=true;e.preventDefault()}});
+addEventListener('keyup',e=>{if(e.code==='Space')boostKey=false});
+$('bb').addEventListener('pointerdown',e=>{bbHeld=true;e.stopPropagation()});
+setInterval(()=>{if(state==='play'&&ws&&ws.readyState===1)ws.send(JSON.stringify({t:'in',a:+mouse.a.toFixed(3),b:(boostKey||bbHeld)?1:0}))},50);
+function resample(p,gap){const out=[{x:p[0],y:p[1]}];let px=p[0],py=p[1],acc=0;
+  for(let i=2;i<p.length;i+=2){const x=p[i],y=p[i+1];let dx=x-px,dy=y-py,d=Math.hypot(dx,dy);
+    while(acc+d>=gap&&out.length<1500){const t=(gap-acc)/d;px+=dx*t;py+=dy*t;out.push({x:px,y:py});dx=x-px;dy=y-py;d=Math.hypot(dx,dy);acc=0}
+    acc+=d;px=x;py=y}return out}
+function drawSnake(s,z){
+  const r=rad(s.mass),sg=s.segs,vw=w/z/2+r+30,vh=h/z/2+r+30,x=s.cur[0],y=s.cur[1];
+  ctx.save();if(s.boost){ctx.shadowColor=s.pal[0];ctx.shadowBlur=22}
+  ctx.strokeStyle='rgba(0,0,0,.28)';ctx.lineWidth=2;
+  for(let i=sg.length-1;i>=0;i--){const p=sg[i];if(Math.abs(p.x-cam.x)>vw||Math.abs(p.y-cam.y)>vh)continue;
+    ctx.fillStyle=s.pal[(i/3|0)%2];ctx.beginPath();ctx.arc(p.x,p.y,r,0,TAU);ctx.fill();ctx.stroke()}
+  ctx.restore();
+  const ca=Math.cos(s.ang),sa=Math.sin(s.ang);
+  for(const sd of[-1,1]){const ex=x+ca*r*.45-sa*r*.5*sd,ey=y+sa*r*.45+ca*r*.5*sd;
+    ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(ex,ey,r*.38,0,TAU);ctx.fill();
+    ctx.fillStyle='#111';ctx.beginPath();ctx.arc(ex+ca*r*.15,ey+sa*r*.15,r*.2,0,TAU);ctx.fill()}
+  ctx.fillStyle='rgba(255,255,255,.85)';ctx.font=`${13/z}px system-ui,sans-serif`;ctx.textAlign='center';ctx.fillText(s.name,x,y-r-8/z)}
+function draw(t,k){
+  for(const s of sn.values()){const f=Math.min(1,k*.35);for(let i=0;i<s.cur.length;i++)s.cur[i]+=(s.tgt[i]-s.cur[i])*f;
+    s.segs=resample(s.cur,Math.max(5,rad(s.mass)*.6))}
+  const me=sn.get(myId),f0=me||(state==='play'?null:[...sn.values()][0]);
+  if(f0){cam.x+=(f0.cur[0]-cam.x)*.15*k;cam.y+=(f0.cur[1]-cam.y)*.15*k;
+    const base=Math.max(.6,Math.min(1.2,Math.min(w,h)/700)),tz=base*Math.max(.45,1-Math.sqrt(f0.mass)*.006)*(state==='play'?1:.85);cam.z+=(tz-cam.z)*.04*k}
+  const z=cam.z;ctx.setTransform(dpr,0,0,dpr,0,0);
+  ctx.fillStyle='#1c0b12';ctx.fillRect(0,0,w,h);
+  ctx.save();ctx.translate(w/2,h/2);ctx.scale(z,z);ctx.translate(-cam.x,-cam.y);
+  ctx.fillStyle='#0d1322';ctx.beginPath();ctx.arc(0,0,W,0,TAU);ctx.fill();
+  const vw=w/z/2+60,vh=h/z/2+60,G=70;ctx.fillStyle='rgba(120,150,255,.14)';ctx.beginPath();
+  for(let gx=Math.floor((cam.x-vw)/G)*G;gx<cam.x+vw;gx+=G)for(let gy=Math.floor((cam.y-vh)/G)*G;gy<cam.y+vh;gy+=G){const ox=(Math.round(gy/G)&1)*G/2;ctx.moveTo(gx+ox+3,gy);ctx.arc(gx+ox,gy,3,0,TAU)}
+  ctx.fill();
+  ctx.save();ctx.strokeStyle='#ff3b5c';ctx.lineWidth=40;ctx.shadowColor='#ff3b5c';ctx.shadowBlur=30;ctx.beginPath();ctx.arc(0,0,W+20,0,TAU);ctx.stroke();ctx.restore();
+  for(const f of foods.values()){if(Math.abs(f.x-cam.x)>vw||Math.abs(f.y-cam.y)>vh)continue;
+    const pr=f.r*(1+Math.sin(t/300+f.p)*.12);ctx.fillStyle=f.c;ctx.globalAlpha=.25;ctx.beginPath();ctx.arc(f.x,f.y,pr*2,0,TAU);ctx.fill();ctx.globalAlpha=1;ctx.beginPath();ctx.arc(f.x,f.y,pr,0,TAU);ctx.fill()}
+  for(const [id,s] of sn)if(id!==myId)drawSnake(s,z);
+  if(me)drawSnake(me,z);
+  ctx.restore();
+  const left=12,top=12,list=[...sn.entries()].sort((a,b)=>b[1].mass-a[1].mass);
+  const mr=48,mx=left+mr,my=top+mr+4;
+  ctx.fillStyle='rgba(0,0,0,.45)';ctx.beginPath();ctx.arc(mx,my,mr,0,TAU);ctx.fill();ctx.strokeStyle='rgba(255,255,255,.3)';ctx.lineWidth=1.5;ctx.stroke();
+  for(const [id,s] of list){ctx.fillStyle=id===myId?'#5effd8':'rgba(255,255,255,.55)';ctx.beginPath();ctx.arc(mx+s.cur[0]/W*mr,my+s.cur[1]/W*mr,id===myId?3:1.6,0,TAU);ctx.fill()}
+  ctx.textAlign='left';ctx.font='12px system-ui,sans-serif';ctx.fillStyle='rgba(255,255,255,.75)';
+  if(roomCode)ctx.fillText('🌐 ห้อง '+roomCode.toUpperCase()+' · ผู้เล่น '+humans+'/10',left,top+mr*2+26);
+  const lw=170,lx=w-lw-12,ly=12;
+  ctx.fillStyle='rgba(0,0,0,.45)';ctx.fillRect(lx,ly,lw,20+Math.min(8,list.length)*18+8);
+  ctx.textAlign='center';ctx.font='bold 13px system-ui,sans-serif';ctx.fillStyle='#5effd8';ctx.fillText('อันดับสูงสุด',lx+lw/2,ly+15);ctx.font='12px system-ui,sans-serif';
+  list.slice(0,8).forEach(([id,s],i)=>{ctx.fillStyle=id===myId?'#5effd8':'#fff';ctx.textAlign='left';ctx.fillText(`${i+1}. ${s.name}`,lx+8,ly+36+i*18);ctx.textAlign='right';ctx.fillText(s.mass*8,lx+lw-8,ly+36+i*18)});
+  if(me&&state==='play'){ctx.textAlign='left';ctx.fillStyle='#fff';ctx.font='bold 16px system-ui,sans-serif';const by=h-24;
+    ctx.fillText('ความยาว: '+me.mass*8,left,by);ctx.font='13px system-ui,sans-serif';ctx.fillStyle='rgba(255,255,255,.75)';ctx.fillText('อันดับ '+(list.findIndex(([id])=>id===myId)+1)+' / '+list.length,left,by-22)}}
+connect();
+let last=performance.now();
+(function loop(now){const k=Math.min((now-last)/16.667,3);last=now;draw(now,k);requestAnimationFrame(loop)})(last);
+</script></body></html>

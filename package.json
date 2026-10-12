@@ -1,0 +1,9 @@
+{
+  "name": "slither-online",
+  "version": "1.0.0",
+  "description": "Slither.io-style multiplayer snake game (max 10 players per room)",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": { "ws": "^8.18.0" },
+  "engines": { "node": ">=18" }
+}
